@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>자동차 부품 생산관리 대시보드</title>
+
+  <!-- CDN: 설치 불필요 -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/html2pdf.js@0.10.1/dist/html2pdf.bundle.min.js"></script>
+
+  <style>
+    body { font-family: Arial, "Malgun Gothic", "맑은 고딕", sans-serif; }
+    .drop-active { border-color: #2563eb !important; background: #eff6ff !important; }
+    .table-scroll::-webkit-scrollbar { height: 8px; width: 8px; }
+    .table-scroll::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 8px; }
+    @media print {
+      .no-print { display: none !important; }
+      body { background: white !important; }
+    }
+  </style>
+</head>
+
+<body class="bg-slate-50 text-slate-800">
+  <div id="dashboard" class="min-h-screen">
+    <header class="bg-white border-b border-slate-200">
+      <div class="max-w-7xl mx-auto px-5 py-5 flex items-center justify-between gap-4">
+        <div>
+          <h1 class="text-2xl md:text-3xl font-bold tracking-tight">생산관리 대시보드</h1>
+          <p class="text-sm text-slate-500 mt-1">생산량 · 불량률 · 비가동시간 관리</p>
+        </div>
+        <button id="pdfBtn"
+          class="no-print px-4 py-2.5 rounded-xl bg-blue-600 text-white font-semibold hover:bg-blue-700 transition">
+          PDF 다운로드
+        </button>
+      </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-5 py-6 space-y-6">
+
+      <!-- Excel 업로드 -->
+      <section class="no-print bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+        <div
+          id="dropZone"
+          class="border-2 border-dashed border-blue-300 rounded-2xl p-8 md:p-12 text-center cursor-pointer hover:bg-blue-50/40 transition"
+        >
+          <div class="text-4xl mb-3">📊</div>
+          <h2 class="text-lg md:text-xl font-bold">엑셀 파일을 드래그 & 드롭하세요</h2>
+          <p class="text-sm text-slate-500 mt-2">또는 클릭하여 .xlsx / .xls 파일을 선택하세요</p>
+          <input id="fileInput" type="file" accept=".xlsx,.xls" class="hidden" />
+          <p id="fileName" class="mt-4 text-sm font-medium text-blue-600">선택된 파일 없음</p>
+        </div>
+
+        <div class="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500">
+          <span>권장 컬럼: 일자, 생산라인, 품목명, 계획량, 실적량, 달성률, 불량수량, 불량률, 비가동시간</span>
+          <button id="sampleBtn" class="ml-auto text-blue-600 hover:underline">샘플 데이터 불러오기</button>
+        </div>
+      </section>
+
+      <!-- KPI -->
+      <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+          <p class="text-sm text-slate-500">계획량</p>
+          <p id="kpiPlan" class="text-3xl font-bold mt-2 text-slate-800">0</p>
+          <p class="text-xs text-slate-400 mt-1">EA</p>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+          <p class="text-sm text-slate-500">실적량</p>
+          <p id="kpiActual" class="text-3xl font-bold mt-2 text-blue-600">0</p>
+          <p class="text-xs text-slate-400 mt-1">EA</p>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+          <p class="text-sm text-slate-500">달성률</p>
+          <p id="kpiAchievement" class="text-3xl font-bold mt-2 text-emerald-600">0.0%</p>
+          <p class="text-xs text-slate-400 mt-1">실적 / 계획</p>
+        </div>
+
+        <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
+          <p class="text-sm text-slate-500">불량률</p>
+          <p id="kpiDefect" class="text-3xl font-bold mt-2 text-red-500">0.00%</p>
+          <p class="text-xs text-slate-400 mt-1">불량수량 / 실적량</p>
+        </div>
+      </section>
+
+      <!-- Chart -->
+      <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 md:p-6">
+        <div class="flex items-center justify-between mb-4">
+          <div>
+            <h2 class="text-lg font-bold">일자별 생산량 추이</h2>
+            <p class="text-sm text-slate-500 mt-1">계획량과 실적량을 비교합니다.</p>
+          </div>
+          <span id="rowCount" class="text-xs text-slate-500">0건</span>
+        </div>
+        <div class="relative h-[360px] md:h-[430px]">
+          <canvas id="productionChart"></canvas>
+        </div>
+      </section>
+
+      <!-- Table -->
+      <section class="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+        <div class="p-5 border-b border-slate-200">
+          <h2 class="text-lg font-bold">생산 데이터</h2>
+          <p class="text-sm text-slate-500 mt-1">업로드한 엑셀의 행과 컬럼을 그대로 표시합니다.</p>
+        </div>
+
+        <div class="table-scroll overflow-auto max-h-[520px]">
+          <table class="min-w-full text-sm">
+            <thead id="tableHead" class="sticky top-0 bg-slate-100 z-10"></thead>
+            <tbody id="tableBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer class="text-center text-xs text-slate-400 pb-8">
+        브라우저에서 엑셀을 읽어 시각화합니다. 데이터는 외부 서버로 업로드하지 않습니다.
+      </footer>
+    </main>
+  </div>
+
+<script>
+  let productionChart = null;
+  let currentRows = [];
+  let currentHeaders = [];
+
+  const sampleData = [
+    ["2026. 8. 31.", "A라인", "브레이크 캘리퍼", 1200, 1160, 0.9666666667, 18, 0.0155172414, 35],
+    ["2026. 9. 1.", "A라인", "브레이크 캘리퍼", 1250, 1285, 1.028, 12, 0.0093385214, 15],
+    ["2026. 9. 2.", "B라인", "스티어링 너클", 980, 955, 0.974489796, 17, 0.0178010471, 42],
+    ["2026. 9. 3.", "B라인", "스티어링 너클", 1000, 1020, 1.02, 9, 0.0088235294, 12],
+    ["2026. 9. 4.", "C라인", "허브 캐리어", 860, 812, 0.9441860465, 22, 0.0270935961, 68],
+    ["2026. 9. 5.", "C라인", "허브 캐리어", 900, 918, 1.02, 11, 0.0119825708, 20],
+    ["2026. 9. 6.", "A라인", "브레이크 캘리퍼", 1300, 1274, 0.98, 15, 0.0117739403, 28],
+    ["2026. 9. 7.", "B라인", "스티어링 너클", 1050, 1088, 1.0361904762, 8, 0.0073529412, 10],
+    ["2026. 9. 8.", "C라인", "허브 캐리어", 920, 875, 0.9510869565, 19, 0.0217142857, 55],
+    ["2026. 9. 9.", "A라인", "브레이크 캘리퍼", 1280, 1305, 1.01953125, 10, 0.0076628352, 8]
+  ];
+
+  const sampleHeaders = [
+    "일자", "생산라인", "품목명", "계획량", "실적량",
+    "달성률", "불량수량", "불량률", "비가동시간"
+  ];
+
+  const aliases = {
+    date: ["일자", "날짜", "date", "Date"],
+    plan: ["계획량", "계획", "plan", "Plan"],
+    actual: ["실적량", "실적", "생산량", "actual", "Actual"],
+    achievement: ["달성률", "달성율", "achievement", "Achievement"],
+    defectQty: ["불량수량", "불량량", "defect", "Defect"],
+    defectRate: ["불량률", "불량율", "defect rate", "defect_rate", "Defect Rate"],
+    downtime: ["비가동시간", "비가동", "downtime", "Downtime"]
+  };
+
+  function normalize(s) {
+    return String(s ?? "").trim().replace(/\s+/g, "").toLowerCase();
+  }
+
+  function findHeader(headers, candidates) {
+    const normalized = headers.map(normalize);
+    for (const candidate of candidates) {
+      const idx = normalized.indexOf(normalize(candidate));
+      if (idx >= 0) return headers[idx];
+    }
+    return null;
+  }
+
+  function toNumber(value) {
+    if (typeof value === "number") return Number.isFinite(value) ? value : 0;
+    const n = Number(String(value ?? "").replace(/,/g, "").replace(/%/g, "").trim());
+    return Number.isFinite(n) ? n : 0;
+  }
+
+  function formatNumber(n) {
+    return Number(n || 0).toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+  }
+
+  function formatCell(value) {
+    if (value instanceof Date) return value.toLocaleDateString("ko-KR");
+    if (typeof value === "number") return Number.isInteger(value) ? value.toLocaleString("ko-KR") : value.toLocaleString("ko-KR", {maximumFractionDigits: 6});
+    return value ?? "";
+  }
+
+  function setFileName(name) {
+    document.getElementById("fileName").textContent = name || "선택된 파일 없음";
+  }
+
+  function updateDashboard(headers, rows) {
+    currentHeaders = headers;
+    currentRows = rows;
+
+    const planH = findHeader(headers, aliases.plan);
+    const actualH = findHeader(headers, aliases.actual);
+    const defectQtyH = findHeader(headers, aliases.defectQty);
+    const defectRateH = findHeader(headers, aliases.defectRate);
+    const dateH = findHeader(headers, aliases.date);
+
+    const plan = rows.reduce((s, r) => s + toNumber(r[planH]), 0);
+    const actual = rows.reduce((s, r) => s + toNumber(r[actualH]), 0);
+    const defectQty = defectQtyH
+      ? rows.reduce((s, r) => s + toNumber(r[defectQtyH]), 0)
+      : 0;
+
+    const achievement = plan ? actual / plan * 100 : 0;
+    const defectRate = defectQtyH
+      ? (actual ? defectQty / actual * 100 : 0)
+      : (defectRateH
+          ? (() => {
+              const vals = rows.map(r => {
+                const v = toNumber(r[defectRateH]);
+                return v <= 1 ? v * 100 : v;
+              });
+              return vals.length ? vals.reduce((a,b)=>a+b,0)/vals.length : 0;
+            })()
+          : 0);
+
+    document.getElementById("kpiPlan").textContent = formatNumber(plan);
+    document.getElementById("kpiActual").textContent = formatNumber(actual);
+    document.getElementById("kpiAchievement").textContent = achievement.toFixed(1) + "%";
+    document.getElementById("kpiDefect").textContent = defectRate.toFixed(2) + "%";
+    document.getElementById("rowCount").textContent = rows.length.toLocaleString("ko-KR") + "건";
+
+    renderChart(dateH, planH, actualH, rows);
+    renderTable(headers, rows);
+  }
+
+  function renderChart(dateH, planH, actualH, rows) {
+    const labels = rows.map((r, i) => dateH ? String(r[dateH] ?? i + 1) : String(i + 1));
+    const plan = rows.map(r => planH ? toNumber(r[planH]) : 0);
+    const actual = rows.map(r => actualH ? toNumber(r[actualH]) : 0);
+
+    if (productionChart) productionChart.destroy();
+
+    productionChart = new Chart(document.getElementById("productionChart"), {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            label: "계획량",
+            data: plan,
+            backgroundColor: "#B8B8B8",
+            borderColor: "#A5A5A5",
+            borderWidth: 1,
+            borderRadius: 5
+          },
+          {
+            label: "실적량",
+            data: actual,
+            backgroundColor: "#2F6FED",
+            borderColor: "#2563EB",
+            borderWidth: 1,
+            borderRadius: 5
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: "index", intersect: false },
+        plugins: {
+          legend: { position: "top" },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${ctx.dataset.label}: ${Number(ctx.raw).toLocaleString("ko-KR")} EA`
+            }
+          }
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            title: { display: true, text: "일자" }
+          },
+          y: {
+            beginAtZero: true,
+            title: { display: true, text: "생산량 (EA)" },
+            ticks: {
+              callback: value => Number(value).toLocaleString("ko-KR")
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function renderTable(headers, rows) {
+    const head = document.getElementById("tableHead");
+    const body = document.getElementById("tableBody");
+
+    head.innerHTML = `<tr>${headers.map(h =>
+      `<th class="px-4 py-3 text-left font-semibold text-slate-700 border-b border-slate-200 whitespace-nowrap">${escapeHtml(h)}</th>`
+    ).join("")}</tr>`;
+
+    body.innerHTML = rows.map(row =>
+      `<tr class="hover:bg-slate-50">
+        ${headers.map(h =>
+          `<td class="px-4 py-3 border-b border-slate-100 whitespace-nowrap">${escapeHtml(formatCell(row[h]))}</td>`
+        ).join("")}
+      </tr>`
+    ).join("");
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  async function readExcel(file) {
+    const buffer = await file.arrayBuffer();
+    const workbook = XLSX.read(buffer, { type: "array", cellDates: true });
+    const sheetName = workbook.SheetNames[0];
+    const sheet = workbook.Sheets[sheetName];
+
+    // header: 1로 원본 셀 구조를 먼저 가져온 뒤, 첫 행을 컬럼명으로 사용
+    const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "" });
+    if (!matrix.length) throw new Error("엑셀에 데이터가 없습니다.");
+
+    const headers = matrix[0].map((v, i) => String(v || `컬럼${i + 1}`));
+    const rows = matrix.slice(1)
+      .filter(row => row.some(v => String(v ?? "").trim() !== ""))
+      .map(row => {
+        const obj = {};
+        headers.forEach((h, i) => obj[h] = row[i] ?? "");
+        return obj;
+      });
+
+    updateDashboard(headers, rows);
+    setFileName(`${file.name} · ${sheetName}`);
+  }
+
+  const dropZone = document.getElementById("dropZone");
+  const fileInput = document.getElementById("fileInput");
+
+  dropZone.addEventListener("click", () => fileInput.click());
+
+  fileInput.addEventListener("change", e => {
+    const file = e.target.files[0];
+    if (file) handleFile(file);
+  });
+
+  ["dragenter", "dragover"].forEach(type => {
+    dropZone.addEventListener(type, e => {
+      e.preventDefault();
+      dropZone.classList.add("drop-active");
+    });
+  });
+
+  ["dragleave", "drop"].forEach(type => {
+    dropZone.addEventListener(type, e => {
+      e.preventDefault();
+      dropZone.classList.remove("drop-active");
+    });
+  });
+
+  dropZone.addEventListener("drop", e => {
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  });
+
+  async function handleFile(file) {
+    if (!/\.(xlsx|xls)$/i.test(file.name)) {
+      alert("엑셀 파일(.xlsx 또는 .xls)만 업로드할 수 있습니다.");
+      return;
+    }
+    try {
+      await readExcel(file);
+    } catch (err) {
+      console.error(err);
+      alert("엑셀 파일을 읽는 중 오류가 발생했습니다. 첫 번째 시트의 첫 행이 컬럼명인지 확인해 주세요.");
+    }
+  }
+
+  document.getElementById("sampleBtn").addEventListener("click", () => {
+    const rows = sampleData.map(row => {
+      const obj = {};
+      sampleHeaders.forEach((h, i) => obj[h] = row[i]);
+      return obj;
+    });
+    updateDashboard(sampleHeaders, rows);
+    setFileName("샘플 데이터");
+  });
+
+  document.getElementById("pdfBtn").addEventListener("click", async () => {
+    const button = document.getElementById("pdfBtn");
+    button.disabled = true;
+    button.textContent = "PDF 생성 중...";
+
+    try {
+      const opt = {
+        margin: 8,
+        filename: "생산관리_대시보드.pdf",
+        image: { type: "jpeg", quality: 0.96 },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: "#f8fafc" },
+        jsPDF: { unit: "mm", format: "a4", orientation: "landscape" },
+        pagebreak: { mode: ["css", "legacy"] }
+      };
+      await html2pdf().set(opt).from(document.getElementById("dashboard")).save();
+    } catch (e) {
+      console.error(e);
+      alert("PDF 생성 중 오류가 발생했습니다.");
+    } finally {
+      button.disabled = false;
+      button.textContent = "PDF 다운로드";
+    }
+  });
+
+  // 처음 화면은 샘플 데이터로 표시
+  document.getElementById("sampleBtn").click();
+</script>
+</body>
+</html>
